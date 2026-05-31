@@ -20,8 +20,8 @@ Soy **CipherWall-Mz**, entusiasta de la ciberseguridad enfocado en pentesting é
  
 | Máquina | OS | Dificultad | Técnicas principales | Writeup |
 |---------|----|------------|----------------------|---------|
-| Reactor | Linux | Easy | CVE-2025-55182, Node.js --inspect, SUID | [📄 Ver](./HTB/Reactor/README.md) |
- 
+| Reactor | Linux | Easy | CVE-2025-55182, Node.js --inspect, SUID | [📄 Ver](./HTB/EASY/Reactor/README.md) |
+| Snapped | Linux | Hard | CVE-2026-27944 — Nginx UI, CVE-2026-3888 — snapd  | [📄 Ver](./HTB/HARD/Snapped/README.md) |
 > El índice se irá actualizando a medida que se agreguen nuevas máquinas.
  
 ---
@@ -87,9 +87,19 @@ Identificación y abuso de vectores para obtener acceso como root o Administrato
 ```
 HTB-Writeups/
 ├── README.md               ← Este archivo
-└── HTB/
-    └── Reactor/
-        └── README.md       ← Writeup completo
+       HTB/
+         ├── EASY/
+         │   ├── Reactor/
+         │   │   └── README.md
+         ├── MEDIUM/
+         │   └── .gitkeep
+         ├── HARD/
+         │   ├── Snapped/
+         │   │   └── README.md
+         │   └── .gitkeep
+         ├── INSANE/
+         │   └── .gitkeep
+                  └── README.md      ← Writeup completo
 ```
  
 ---
