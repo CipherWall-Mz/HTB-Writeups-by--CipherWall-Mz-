@@ -22,7 +22,7 @@ Soy **CipherWall-Mz**, entusiasta de la ciberseguridad enfocado en pentesting é
 |---------|----|------------|----------------------|---------|
 | Reactor | Linux | Easy | CVE-2025-55182, Node.js --inspect, SUID | [📄 Ver](./HTB/EASY/Reactor/README.md) |
 | Snapped | Linux | Hard | CVE-2026-27944 — Nginx UI, CVE-2026-3888 — snapd  | [📄 Ver](./HTB/HARD/Snapped/README.md) |
-| Orion   | Linux | Easy | CVE-2025-32432 (Craft CMS Pre-auth RCE) / CVE-2026-24061 (GNU Inetutils telnetd Auth Bypass)|  |  
+| Orion   | Linux | Easy | CVE-2025-32432 (Craft CMS Pre-auth RCE) / CVE-2026-24061 (GNU Inetutils telnetd Auth Bypass)| [📄 Ver](./HTB/EASY/Orion/README.md) |  
 > El índice se irá actualizando a medida que se agreguen nuevas máquinas.
  
 ---
